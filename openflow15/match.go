@@ -2153,6 +2153,25 @@ func (f *IcmpTypeField) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
+// Return a MatchField for icmp type matching
+func NewIcmpTypeField(isV6 bool, icmpType uint8) *MatchField {
+	f := new(MatchField)
+	f.Class = OXM_CLASS_OPENFLOW_BASIC
+	if isV6 {
+		f.Field = OXM_FIELD_ICMPV6_TYPE
+	} else {
+		f.Field = OXM_FIELD_ICMPV4_TYPE
+	}
+	f.HasMask = false
+
+	icmpTypeField := new(IcmpTypeField)
+	icmpTypeField.Type = icmpType
+	f.Value = icmpTypeField
+	f.Length = uint8(icmpTypeField.Len())
+
+	return f
+}
+
 type IcmpCodeField struct {
 	Code uint8
 }
