@@ -24,69 +24,74 @@ type Stats struct {
 	Pad    uint32 /* Zero bytes - see above for sizing */
 }
 
-func (s *Stats) Len() (n uint16) {
-	n = 4
+func (s *Stats) bodyLen() uint16 {
+	n := uint16(4) // 2B Reserved + 2B Length
 	for _, f := range s.Fields {
 		n += f.Len()
 	}
-	n += 4
 	return n
 }
 
-func (s *Stats) MarshalBinary() (data []byte, err error) {
-	data = make([]byte, int(s.Len()))
-	n := 2
-	s.Length = s.Len() - 4 // 'Pad' not part of Length
-	binary.BigEndian.PutUint16(data[n:], s.Length)
-	n += 2
-
-	for _, f := range s.Fields {
-		var b []byte
-		b, err = f.MarshalBinary()
-		if err != nil {
-			return
-		}
-		copy(data[n:], b)
-		n += len(b)
-	}
-	return
+func (s *Stats) Len() uint16 {
+	l := s.bodyLen()
+	return (l + 7) &^ uint16(7)
 }
 
-func (s *Stats) UnmarshalBinary(data []byte) (err error) {
-	klog.V(7).InfoS("Stats Data", "data", data)
-	n := 2 // 2 bytes Reserved
-	s.Length = binary.BigEndian.Uint16(data[n:])
-	n += 2
-	klog.V(7).InfoS("Stats Length", "len", s.Length)
+func (s *Stats) MarshalBinary() ([]byte, error) {
+	body := s.bodyLen()
+	s.Length = body // spec: excludes padding, includes the 4-byte header
+
+	total := s.Len()
+	data := make([]byte, total)
+
+	// Reserved = 0 (already zeroed)
+	off := 2
+	binary.BigEndian.PutUint16(data[off:], s.Length)
+	off += 2
+
+	for _, f := range s.Fields {
+		b, err := f.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		copy(data[off:], b)
+		off += len(b)
+	}
+
+	// zero padding to 8-byte boundary
+	// pad := int(total - off) // already zeroed by make(), nothing else to do
+	return data, nil
+}
+
+func (s *Stats) UnmarshalBinary(data []byte) error {
+	if len(data) < 4 {
+		return fmt.Errorf("ofp_stats too short")
+	}
+	// Reserved := binary.BigEndian.Uint16(data[0:2]) // ignored, must be 0
+	s.Length = binary.BigEndian.Uint16(data[2:4])
+
+	n := 4
 	for n < int(s.Length) {
 		var f util.Message
-		klog.V(7).InfoS("Stats Field", "value", data[n+2]>>1)
 		switch data[n+2] >> 1 {
-		case XST_OFB_DURATION:
-			fallthrough
-		case XST_OFB_IDLE_TIME:
-			klog.V(7).InfoS("Received TimeStatField", "offset", n)
+		case XST_OFB_DURATION, XST_OFB_IDLE_TIME:
 			f = new(TimeStatField)
 		case XST_OFB_FLOW_COUNT:
-			klog.V(7).InfoS("Received FlowCountStatField", "offset", n)
 			f = new(FlowCountStatField)
-		case XST_OFB_PACKET_COUNT:
-			fallthrough
-		case XST_OFB_BYTE_COUNT:
-			klog.V(7).InfoS("Received PBCountStatField", "offset", n)
+		case XST_OFB_PACKET_COUNT, XST_OFB_BYTE_COUNT:
 			f = new(PBCountStatField)
 		default:
-			return fmt.Errorf("Received unknown Stats field: %v", data[n+2]>>1)
+			return fmt.Errorf("unknown OXS stat field: %d", data[n+2]>>1)
 		}
-		err = f.UnmarshalBinary(data[n:])
-		if err != nil {
-			klog.ErrorS(err, "Failed to unmarshal Stats's Field", "data", data[n:])
-			return
+		if err := f.UnmarshalBinary(data[n:]); err != nil {
+			return err
 		}
-		n += int(f.Len())
 		s.Fields = append(s.Fields, f)
+		n += int(f.Len())
 	}
-	return
+
+	// Skip padding (caller can compute consumed bytes as s.Len()).
+	return nil
 }
 
 func NewStats() *Stats {
