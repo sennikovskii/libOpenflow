@@ -412,6 +412,8 @@ func DecodeMatchField(class uint16, field uint8, length uint8, hasMask bool, dat
 			val = new(TcpFlagsField)
 		case OXM_FIELD_ACTSET_OUTPUT:
 			val = new(ActsetOutputField)
+		case OXM_FIELD_PACKET_TYPE:
+			val = new(PacketTypeField)
 		default:
 			err := fmt.Errorf("unhandled Field: %d in Class: %d", field, class)
 			klog.ErrorS(err, "Received bad pkt class", "data", data)
